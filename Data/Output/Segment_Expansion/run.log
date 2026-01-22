@@ -1,0 +1,3 @@
+2026-01-15 18:50:58,495 | INFO | Loaded Input A: Data/Input/Raw_segments/Data_Marketplace_Full_Catalog.csv (rows=694041, cols=25)
+2026-01-15 18:50:58,495 | INFO | Loaded Input B: Data/Input/Raw_segments/Data_Marketplace_Segments_for_Cybba.csv (rows=3359, cols=34)
+2026-01-15 18:51:27,884 | INFO | Wrote proposals: Data/Output/Segment_Expansion/proposals.csv (rows=500)

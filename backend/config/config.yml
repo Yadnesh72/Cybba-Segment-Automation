@@ -1,0 +1,86 @@
+paths:
+  base_dir: "Data"
+  input_dir: "/Users/yadnesh/cybba/cybba_segment_automation/Data/Input/Raw_segments"
+  output_dir: "/Users/yadnesh/cybba/cybba_segment_automation/Data/Output/Segment_Expansion"
+
+files:
+  input_a: "Data_Marketplace_Full_Catalog.csv"            # LiveRamp distributed (all providers)
+  input_b: "Data_Marketplace_Segments_for_Cybba.csv"      # Cybba underived from S3 export
+  output_format: "Output_format.csv"                      # template for final output columns
+
+provider:
+  cybba_name: "Cybba"
+
+taxonomy:
+  separator: " > "
+  strip_leading_asterisks: true
+
+  # IMPORTANT: competitor taxonomy is not Cybba taxonomy; gating causes bad deep outputs
+  use_taxonomy_gating: false
+  fallback_to_all_underived_if_missing_taxonomy: true
+
+  # naming requirement: Cybba > L1 > L2 > Leaf  => total nodes = 4
+  output_max_levels: 2                 # L1 + L2 (NOT including provider, NOT leaf)
+  expected_total_nodes: 4
+
+naming:
+  # Force clean, consistent naming
+  provider_prefix: true                # "Cybba > ..."
+  taxonomy_levels: 2                   # L1, L2
+  leaf_source_order: ["competitor", "underived", "fallback"]
+  leaf_audience_suffix: true           # if leaf doesn't look like audience, add suffix
+  drop_if_leaf_looks_like_code: true   # drop if leaf is like "0" or hash
+
+model:
+  embedding: "tfidf"
+  tfidf:
+    ngram_min: 1
+    ngram_max: 2
+    stop_words: "english"
+    min_df: 2
+    max_features: 200000
+
+generation:
+  max_proposals: 500
+  max_components: 2
+  retrieval_pool_size: 50
+  max_candidates_from_A: 5000
+  fallback_l1: "Behavioral Audience"
+  fallback_l2: "Lifestyle"
+
+  # optional guardrails so we don't propose low-quality matches
+  min_composition_similarity: 0.15     # tune upward once stable
+
+coverage:
+  enable: true
+  cover_threshold: 0.85
+  review_threshold: 0.85
+
+dedupe:
+  near_duplicate_threshold: 0.93
+  resolve_name_collision: true
+  collision_hash_len: 8
+
+output:
+  proposals_filename: "proposals.csv"
+  proposals_validated_filename: "proposals_validated.csv"
+  final_filename: "Cybba_New_Additional_Segments.csv"
+  coverage_filename: "coverage.csv"
+  log_filename: "run.log"
+
+underived_id:
+  strategy: "field_value"
+  field_id_col: "LiveRamp Field ID"
+  value_id_col: "LiveRamp Value ID"
+  fallback_segment_id_col: "LiveRamp Segment ID"
+
+training:
+  taxonomy_train_file: "Output_format.csv"
+  name_col: "New Segment Name"
+  desc_col: "Segment Description"
+  model_dir: "Data/Models"
+
+descriptions:
+  enable: true
+  model: "llama3.1"
+  batch_size: 20

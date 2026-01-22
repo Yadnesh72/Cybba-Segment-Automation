@@ -1,0 +1,5 @@
+Competitor Provider,Competitor Segment Name,Competitor Segment ID,Closest Cybba Segment,Similarity
+Bridge,**AlarisB2B > B2B > Decision Makers > Shipping and Logistics Decision Makers,1012602031,Cybba > Cybba > B2B Audience > Industry > Logistics Automation Leads,0.8677
+Bridge,**AlarisB2B > B2B > Decision Makers > Technology Decision Makers,1012602021,Cybba > B2B Audience > Industry > SaaS Technology Decision Makers,0.8597
+Bridge,**AlarisB2B > B2B > Industry > 1: SIC CODES > (SIC2: 65) Real Estate,1012600481,Cybba > Behavioral Audience > Real Estate,0.9153
+Bridge,"**AlarisB2B > B2B > Industry > Software, Technology & Information Systems Industry",1012600081,Cybba > B2B Audience > Industry > SaaS Technology Decision Makers,0.8531
