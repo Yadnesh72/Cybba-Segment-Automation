@@ -4,9 +4,9 @@ paths:
   output_dir: "/Users/yadnesh/cybba/cybba_segment_automation/Data/Output/Segment_Expansion"
 
 files:
-  input_a: "Data_Marketplace_Full_Catalog.csv"            # LiveRamp distributed (all providers)
-  input_b: "Data_Marketplace_Segments_for_Cybba.csv"      # Cybba underived from S3 export
-  output_format: "Output_format.csv"                      # template for final output columns
+  input_a: "Data_Marketplace_Full_Catalog.csv"
+  input_b: "Data_Marketplace_Segments_for_Cybba.csv"
+  output_format: "Output_format.csv"
 
 provider:
   cybba_name: "Cybba"
@@ -14,22 +14,17 @@ provider:
 taxonomy:
   separator: " > "
   strip_leading_asterisks: true
-
-  # IMPORTANT: competitor taxonomy is not Cybba taxonomy; gating causes bad deep outputs
   use_taxonomy_gating: false
   fallback_to_all_underived_if_missing_taxonomy: true
-
-  # naming requirement: Cybba > L1 > L2 > Leaf  => total nodes = 4
-  output_max_levels: 2                 # L1 + L2 (NOT including provider, NOT leaf)
+  output_max_levels: 2
   expected_total_nodes: 4
 
 naming:
-  # Force clean, consistent naming
-  provider_prefix: true                # "Cybba > ..."
-  taxonomy_levels: 2                   # L1, L2
+  provider_prefix: true
+  taxonomy_levels: 2
   leaf_source_order: ["competitor", "underived", "fallback"]
-  leaf_audience_suffix: true           # if leaf doesn't look like audience, add suffix
-  drop_if_leaf_looks_like_code: true   # drop if leaf is like "0" or hash
+  leaf_audience_suffix: true
+  drop_if_leaf_looks_like_code: true
 
 model:
   embedding: "tfidf"
@@ -47,9 +42,7 @@ generation:
   max_candidates_from_A: 5000
   fallback_l1: "Behavioral Audience"
   fallback_l2: "Lifestyle"
-
-  # optional guardrails so we don't propose low-quality matches
-  min_composition_similarity: 0.15     # tune upward once stable
+  min_composition_similarity: 0.15
 
 coverage:
   enable: true
@@ -84,3 +77,11 @@ descriptions:
   enable: true
   model: "llama3.1"
   batch_size: 20
+
+pricing_model:
+  enable: true
+  model_path: "/Users/yadnesh/cybba/cybba_segment_automation/backend/models/pricing_model.joblib"
+  defaults:
+    provider_name: "Cybba"
+    country: "USA"
+    currency: "USD"

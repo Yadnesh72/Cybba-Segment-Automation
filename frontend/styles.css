@@ -132,6 +132,7 @@ code{
   gap: 12px;
   flex-wrap: wrap;
 }
+
 .field{
   display: flex;
   flex-direction: column;
@@ -281,6 +282,94 @@ code{
 .table tr:hover td{
   background: rgba(255,255,255,0.04);
 }
+
+/* ===== Dashboard layout: metrics strip + filters strip ===== */
+
+.metricsStrip{
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 14px;
+}
+@media (max-width: 1100px){
+  .metricsStrip{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px){
+  .metricsStrip{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.metricTile{
+  border-radius: var(--radius);
+  border: 1px solid var(--cardBorder);
+  background: rgba(255,255,255,0.06);
+  box-shadow: var(--shadow);
+  padding: 12px 12px;
+  backdrop-filter: blur(14px);
+  min-height: 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metricLabel{
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.70);
+}
+
+.metricValue{
+  font-size: 18px;
+  font-weight: 900;
+  color: rgba(255,255,255,0.92);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricHint{
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.filtersStrip{
+  border-radius: var(--radius);
+  border: 1px solid var(--cardBorder);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  backdrop-filter: blur(14px);
+  margin-bottom: 14px;
+}
+
+.filtersStripHeader{
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* ✅ UPDATED: evenly spaced controls using grid */
+.filtersStripBody{
+  display: grid;
+  grid-template-columns: 2fr 1.2fr 1fr;
+  gap: 14px;
+  align-items: end;
+}
+
+/* ✅ Make grid children shrink properly (prevents overflow) */
+.filtersStripBody .field{
+  min-width: 0;
+}
+
+/* Mobile: stack */
+@media (max-width: 980px){
+  .filtersStripBody{
+    grid-template-columns: 1fr;
+  }
+}
+
 
 /* Skeletons */
 .skeletonGrid{
@@ -434,4 +523,150 @@ code{
   color: rgba(255,255,255,0.90);
   font-weight: 900;
   margin-bottom: 4px;
+}
+
+/* --- Slider UI --- */
+.sliderRow{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.slider{
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.14);
+  outline: none;
+  transition: background 200ms ease, transform 200ms ease;
+}
+
+.slider:hover{
+  background: rgba(255,255,255,0.14);
+}
+
+.slider:active{
+  transform: scaleY(1.05);
+}
+
+/* Disabled slider state (visual only) */
+.slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(40%);
+}
+
+/* Disable hover/active effects when disabled */
+.slider:disabled:hover {
+  background: rgba(255,255,255,0.10);
+}
+
+.slider:disabled::-webkit-slider-thumb {
+  box-shadow: none;
+  transform: none;
+}
+
+.slider:disabled::-moz-range-thumb {
+  box-shadow: none;
+  transform: none;
+}
+
+
+/* track fill effect (simple & clean) */
+.slider::-webkit-slider-runnable-track{
+  height: 10px;
+  border-radius: 999px;
+}
+.slider::-webkit-slider-thumb{
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -4px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(124,58,237,1), rgba(99,102,241,0.9));
+  border: 1px solid rgba(255,255,255,0.25);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.25);
+  transition: transform 150ms ease;
+}
+.slider:active::-webkit-slider-thumb{
+  transform: scale(1.08);
+}
+
+/* Firefox */
+.slider::-moz-range-track{
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+}
+.slider::-moz-range-thumb{
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(124,58,237,1), rgba(99,102,241,0.9));
+  border: 1px solid rgba(255,255,255,0.25);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.25);
+  transition: transform 150ms ease;
+}
+
+/* value bubble */
+.sliderValue{
+  min-width: 54px;
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.18);
+  font-weight: 900;
+  transition: transform 180ms ease, background 180ms ease;
+}
+.sliderValue:hover{
+  transform: translateY(-1px);
+  background: rgba(0,0,0,0.24);
+}
+
+/* small inline pill */
+.pill{
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  font-weight: 900;
+}
+
+/* --- Slider improvements: filled track --- */
+.slider {
+  /* Use CSS vars set inline from React: --pct (0%..100%) */
+  background: linear-gradient(
+    90deg,
+    rgba(124,58,237,0.75) 0%,
+    rgba(99,102,241,0.55) var(--pct, 0%),
+    rgba(255,255,255,0.10) var(--pct, 0%),
+    rgba(255,255,255,0.10) 100%
+  );
+}
+
+/* Optional helper text for controls */
+.helpText {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 6px;
+}
+
+/* Optional badge for "streaming" / status */
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.18);
 }

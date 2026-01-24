@@ -2,17 +2,31 @@ import React, { useMemo, useRef, useState } from "react";
 import { downloadCsv, runPipelineStream } from "./api";
 import RunButton from "../components/RunButton";
 import DownloadButton from "../components/DownloadButton";
-import SummaryCard from "../components/SummaryCard";
 import SegmentsTable from "../components/SegmentsTable";
 import "../styles.css";
 
 type Mode = "final" | "validated";
 
 export default function App() {
-  const [streaming, setStreaming] = useState(false); // ✅ replaces "loading"
+  const [streaming, setStreaming] = useState(false);
+
+  // discovered from backend summary
+  const [availableValidated, setAvailableValidated] = useState<number | null>(
+    null
+  );
+
+  // user-controlled cap
+  const [maxRows, setMaxRows] = useState<number>(100);
+
   const [runId, setRunId] = useState<string | null>(null);
   const [summary, setSummary] = useState<Record<string, any> | null>(null);
+
+  // validated rows (streaming)
   const [rows, setRows] = useState<Record<string, any>[]>([]);
+
+  // FINAL rows (priced, template-driven)
+  const [finalRows, setFinalRows] = useState<Record<string, any>[]>([]);
+
   const [error, setError] = useState<string | null>(null);
 
   const stopRef = useRef<null | (() => void)>(null);
@@ -21,47 +35,64 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [minUniq, setMinUniq] = useState<number>(0);
 
+  // Once pricing is done, always show finalRows. While streaming, show validated rows.
+  const displayRows = finalRows.length > 0 ? finalRows : rows;
+
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter((r) => {
-      const name = String(r["Proposed New Segment Name"] ?? "").toLowerCase();
+
+    return displayRows.filter((r) => {
+      const name = String(
+        r["New Segment Name"] ?? r["Proposed New Segment Name"] ?? ""
+      ).toLowerCase();
+
       const okQ = !q || name.includes(q);
-      const uniq = Number(r["uniqueness_score"]);
-      const okUniq = Number.isFinite(uniq) ? uniq >= minUniq : true;
+
+      // uniqueness might not exist in final rows; if missing, don't filter it out
+      const uniqRaw = r["uniqueness_score"];
+      const uniq = Number(uniqRaw);
+      const okUniq =
+        uniqRaw === undefined || uniqRaw === null || uniqRaw === ""
+          ? true
+          : Number.isFinite(uniq)
+          ? uniq >= minUniq
+          : true;
+
       return okQ && okUniq;
     });
-  }, [rows, query, minUniq]);
+  }, [displayRows, query, minUniq]);
 
   function onRun() {
-    if (stopRef.current) {
-      stopRef.current();
-      stopRef.current = null;
-    }
+  try {
+    if (stopRef.current) stopRef.current();
 
     setStreaming(true);
     setError(null);
 
     setRows([]);
+    setFinalRows([]);
     setSummary(null);
     setRunId(null);
 
     const stop = runPipelineStream({
-      onRunId: (id) => setRunId(id),
-      onSummary: (s) => setSummary(s ?? null),
-
-      onRow: (row) => {
-        setRows((prev) => [...prev, row]);
-        // ✅ overlay will auto-hide because rows.length becomes > 0
+      max_rows: maxRows,
+      onRunId: setRunId,
+      onSummary: (s) => {
+        setSummary(s ?? null);
+        const total = Number((s as any)?.validated_total);
+        if (Number.isFinite(total) && total > 0) {
+          setAvailableValidated(total);
+          setMaxRows((prev) => Math.min(prev, total));
+        }
       },
-
+      onRow: (row) => setRows((prev) => [...prev, row]),
       onDone: (payload) => {
         if (payload?.summary) setSummary(payload.summary);
         if (payload?.run_id) setRunId(payload.run_id);
-
+        if (Array.isArray(payload?.final_rows)) setFinalRows(payload.final_rows);
         setStreaming(false);
         stopRef.current = null;
       },
-
       onError: (msg) => {
         setError(msg);
         setStreaming(false);
@@ -70,15 +101,23 @@ export default function App() {
     });
 
     stopRef.current = stop;
+  } catch (e: any) {
+    setError(e?.message || String(e));
+    setStreaming(false);
+    stopRef.current = null;
   }
+}
+
 
   function onDownload(mode: Mode) {
     if (!runId) return;
     downloadCsv(runId, mode);
   }
 
-  // ✅ Overlay visible ONLY until first row arrives
   const showOverlay = streaming && rows.length === 0;
+
+  const sliderMax = availableValidated ?? 500;
+  const sliderValue = Math.max(1, Math.min(maxRows, sliderMax));
 
   return (
     <div className="app">
@@ -88,9 +127,7 @@ export default function App() {
         <div className="titleBlock">
           <div className="badge">Cybba</div>
           <h1 className="title">Segment Expansion</h1>
-          <p className="subtitle">
-            Run the pipeline, review validated segments, and download the CSV.
-          </p>
+          <p className="subtitle">Generate, price, and export new audience segments.</p>
         </div>
 
         <div className="actions">
@@ -104,89 +141,93 @@ export default function App() {
       </header>
 
       <main className="main">
+        {/* error toast */}
         <div className={`toast ${error ? "toastShow" : ""}`}>
           <div className="toastTitle">Backend error</div>
           <div className="toastBody">{error ?? ""}</div>
         </div>
 
-        <section className="grid">
-          <div className="card fadeInUp">
-            <SummaryCard runId={runId} summary={summary} loading={streaming && rows.length === 0} />
+        {/* filters */}
+        <section className="filtersStrip fadeInUp">
+          <div className="filtersStripHeader">
+            <div className="cardTitle">Filters</div>
+            <div className="cardHint">
+              Showing <b>{filteredRows.length}</b> / {displayRows.length}
+            </div>
           </div>
 
-          <div className="card fadeInUp" style={{ animationDelay: "60ms" }}>
-            <div className="cardHeader">
-              <div className="cardTitle">Filters</div>
-              <div className="cardHint">
-                Showing <b>{filteredRows.length}</b> / {rows.length}
+          <div className="filtersStripBody">
+            <div className="field">
+              <span>
+                Segments to generate{" "}
+                {availableValidated ? (
+                  <span className="pill" style={{ marginLeft: 8 }}>
+                    {availableValidated} available
+                  </span>
+                ) : null}
+              </span>
+
+              <div className="sliderRow">
+                <input
+                  type="range"
+                  className={`slider ${streaming ? "sliderDisabled" : ""}`}
+                  min={1}
+                  max={sliderMax}
+                  value={sliderValue}
+                  disabled={streaming}
+                  onChange={(e) => setMaxRows(Number(e.target.value))}
+                />
+                <div className={`sliderValue ${streaming ? "sliderValueDisabled" : ""}`}>
+                  {sliderValue}
+                </div>
               </div>
             </div>
 
-            <div className="filters">
-              <label className="field">
-                <span>Search name</span>
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder='e.g. "Decision Makers"'
-                />
-              </label>
+            <label className="field">
+              <span>Search</span>
+              <input value={query} onChange={(e) => setQuery(e.target.value)} />
+            </label>
 
-              <label className="field">
-                <span>Min uniqueness</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={minUniq}
-                  onChange={(e) => setMinUniq(Number(e.target.value))}
-                />
-              </label>
-            </div>
-
-            <div className="muted" style={{ marginTop: 8 }}>
-              Tip: sort by <code>rank_score</code> on the table.
-            </div>
+            <label className="field">
+              <span>Min uniqueness</span>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={minUniq}
+                onChange={(e) => setMinUniq(Number(e.target.value))}
+              />
+            </label>
           </div>
         </section>
 
-        <section className="card fadeInUp" style={{ animationDelay: "120ms" }}>
+        {/* table */}
+        <section className="card fadeInUp">
           <div className="cardHeader">
-            <div className="cardTitle">Validated Proposals</div>
-
-            {/* ✅ Small loading symbol while streaming */}
-            <div className="muted" style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              {runId ? (
-                <>
-                  run_id: <code>{runId}</code>
-                </>
-              ) : (
-                <>Run the pipeline to view results.</>
-              )}
-
-              {streaming ? (
-                <>
-                  <span className="miniSpinner" />
-                  <span>streaming…</span>
-                </>
-              ) : null}
+            <div className="cardTitle">
+              {finalRows.length > 0 ? "Priced Segments" : "Validated Segments"}
             </div>
+
+            {streaming ? (
+              <div className="muted" style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                <span className="miniSpinner" />
+                streaming…
+              </div>
+            ) : null}
           </div>
 
           <SegmentsTable rows={filteredRows} loading={streaming && rows.length === 0} />
         </section>
       </main>
 
-      {/* ✅ Big overlay only until first row */}
+      {/* overlay */}
       <div className={`overlay ${showOverlay ? "overlayShow" : ""}`}>
         <div className="overlayCard">
           <div className="spinner" />
           <div className="overlayText">
             <div className="overlayTitle">Running pipeline</div>
-            <div className="overlaySub">
-              Generating, validating, ranking… streaming rows as they’re ready.
-            </div>
+            <div className="overlaySub">Generating, pricing, and ranking segments…</div>
           </div>
         </div>
       </div>

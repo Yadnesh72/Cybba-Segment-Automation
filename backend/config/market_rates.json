@@ -1,0 +1,26 @@
+{
+  "version": "2026-01-22",
+  "currency": "USD",
+  "defaults": {
+    "digital_display_cpm": 9.5,
+    "content_marketing_cpm": 18.0,
+    "tv_targeting_cpm": 28.0,
+    "cpc": 2.6,
+    "programmatic_pct": 0.75,
+    "advertiser_direct_pct": 0.25,
+    "cpm_cap": 35.0
+  },
+
+  "rules": {
+    "uniqueness_boost": {
+      "low": 0.90,
+      "mid": 1.00,
+      "high": 1.12
+    },
+    "rank_boost": {
+      "low": 0.95,
+      "mid": 1.00,
+      "high": 1.08
+    }
+  }
+}

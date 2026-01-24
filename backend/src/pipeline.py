@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import io
 import re
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pandas as pd
 import yaml
 
+from llm_descriptions import generate_descriptions, generate_segment_description
 from segment_expansion_model import generate_proposals
 from validators import validate_and_prepare
-from llm_descriptions import generate_descriptions, generate_segment_description
 
+# Pricing model (trained .joblib inference)
+from pricing_model import PRICE_COLS, PricingDefaults, load_pricing_model, predict_prices
 
 # ----------------------------
 # In-memory cache for LLM descriptions (persists while FastAPI process is running)
@@ -143,7 +146,7 @@ def build_final_from_template(validated_df: pd.DataFrame, template_df: pd.DataFr
         else:
             out["Segment Description"] = ""
 
-    # Fill remaining columns
+    # Fill remaining columns (pricing values can be overwritten by model if enabled)
     for c in out_cols:
         if c in out.columns and len(out[c].dropna()) > 0:
             continue
@@ -192,10 +195,106 @@ def add_uniqueness_and_rank(validated_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _sort_for_generation(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make generation deterministic:
+    Prefer rank_score desc, else Composition Similarity desc.
+    """
+    out = df.copy()
+    if "rank_score" in out.columns:
+        return out.sort_values("rank_score", ascending=False)
+    if "Composition Similarity" in out.columns:
+        return out.sort_values("Composition Similarity", ascending=False)
+    return out
+
+
+def _apply_cap(df: pd.DataFrame, max_rows: Optional[int]) -> pd.DataFrame:
+    if isinstance(max_rows, int) and max_rows > 0:
+        return df.head(max_rows).copy()
+    return df
+
+
+# ----------------------------
+# ✅ Pricing (Phase 1: model inference)
+# ----------------------------
+def _pricing_config(cfg: dict) -> Tuple[bool, Optional[str], PricingDefaults]:
+    pricing_cfg = cfg.get("pricing_model", {}) or {}
+    enabled = bool(pricing_cfg.get("enable", False))
+
+    model_path = pricing_cfg.get("model_path")
+    defaults_cfg = pricing_cfg.get("defaults", {}) or {}
+    defaults = PricingDefaults(
+        provider_name=str(defaults_cfg.get("provider_name", "Cybba")),
+        country=str(defaults_cfg.get("country", "USA")),
+        currency=str(defaults_cfg.get("currency", "USD")),
+    )
+    return enabled, model_path, defaults
+
+
+def _resolve_model_path(base_dir: Path, model_path: str) -> Path:
+    """
+    Resolve pricing model path safely:
+    - expanduser (~)
+    - if relative, resolve against base_dir
+    """
+    p = Path(model_path).expanduser()
+    if not p.is_absolute():
+        p = (base_dir / p).resolve()
+    return p
+
+
+@lru_cache(maxsize=4)
+def _cached_pricing_model(model_path_abs: str):
+    """
+    Cache by absolute string path (stable).
+    """
+    return load_pricing_model(Path(model_path_abs))
+
+
+def _apply_pricing_if_enabled(
+    base_dir: Path,
+    cfg: dict,
+    validated_scored: pd.DataFrame,
+    final_df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    If enabled in config.yml, loads trained model and fills pricing columns
+    in final_df (template-driven output) based on validated_scored content.
+
+    Returns (final_df, pricing_error_message_or_None).
+    Never raises: we don't want to kill SSE streaming.
+    """
+    enabled, model_path, defaults = _pricing_config(cfg)
+    if not enabled:
+        return final_df, None
+
+    if not model_path:
+        return final_df, "pricing_model.enable=true but pricing_model.model_path is missing in config.yml"
+
+    if validated_scored is None or len(validated_scored) == 0:
+        return final_df, None
+
+    try:
+        resolved = _resolve_model_path(base_dir, model_path)
+        model = _cached_pricing_model(str(resolved))
+
+        prices_df = predict_prices(model, validated_scored, defaults=defaults)
+
+        out = final_df.copy()
+        for c in PRICE_COLS:
+            if c in out.columns and c in prices_df.columns:
+                out[c] = prices_df[c]
+        return out, None
+
+    except Exception as e:
+        # Do NOT crash streaming; surface error in summary
+        return final_df, f"{type(e).__name__}: {e}"
+
+
 # ----------------------------
 # Pipeline runner (non-streaming)
 # ----------------------------
-def run_pipeline(base_dir: Path) -> Dict[str, Any]:
+def run_pipeline(base_dir: Path, max_rows: Optional[int] = None) -> Dict[str, Any]:
     cfg = load_config(base_dir)
 
     proposals_df, coverage_df = generate_proposals(cfg)
@@ -211,10 +310,16 @@ def run_pipeline(base_dir: Path) -> Dict[str, Any]:
         cfg=cfg,
     )
 
-    validated_scored = add_uniqueness_and_rank(validated_df).copy()
+    validated_scored_full = add_uniqueness_and_rank(validated_df).copy()
+    validated_scored_full = _sort_for_generation(validated_scored_full)
 
-    # LLM descriptions (optional toggle via config)
-    if cfg.get("descriptions", {}).get("enable", False):
+    validated_total = int(len(validated_scored_full))
+
+    validated_scored = _apply_cap(validated_scored_full, max_rows)
+
+    enable_desc = bool(cfg.get("descriptions", {}).get("enable", False))
+
+    if enable_desc and len(validated_scored) > 0:
         descs = generate_descriptions(
             validated_scored,
             model=cfg["descriptions"].get("model", "llama3.1"),
@@ -228,7 +333,8 @@ def run_pipeline(base_dir: Path) -> Dict[str, Any]:
     template_df = load_output_template(cfg)
     final_df = build_final_from_template(validated_scored, template_df)
 
-    # summary
+    final_df, pricing_error = _apply_pricing_if_enabled(base_dir, cfg, validated_scored, final_df)
+
     if "Proposed New Segment Name" in validated_scored.columns:
         norm = validated_scored["Proposed New Segment Name"].map(normalize_name)
         dup_within_norm = int(norm.duplicated().sum())
@@ -240,7 +346,9 @@ def run_pipeline(base_dir: Path) -> Dict[str, Any]:
 
     summary = {
         "total_proposals": int(len(proposals_df)),
-        "validated": int(len(validated_scored)),
+        "validated_total": validated_total,
+        "validated_generated": int(len(validated_scored)),
+        "cap_applied": int(max_rows) if isinstance(max_rows, int) else None,
         "covered": int(len(coverage_df)),
         "duplicates_within_output_normalized": int(dup_within_norm),
         "dropped_naming": int(getattr(report, "dropped_naming", 0)),
@@ -249,6 +357,8 @@ def run_pipeline(base_dir: Path) -> Dict[str, Any]:
         "collisions_resolved": int(getattr(report, "collisions_resolved", 0)),
         "uniqueness_stats": uniq_stats,
         "rank_stats": rank_stats,
+        "pricing_enabled": bool((cfg.get("pricing_model", {}) or {}).get("enable", False)),
+        "pricing_error": pricing_error,
     }
 
     return {
@@ -265,14 +375,12 @@ def run_pipeline(base_dir: Path) -> Dict[str, Any]:
 # ----------------------------
 # Pipeline runner (streaming)
 # ----------------------------
-def run_pipeline_stream(base_dir: Path) -> Iterator[Dict[str, Any]]:
+def run_pipeline_stream(base_dir: Path, max_rows: Optional[int] = None) -> Iterator[Dict[str, Any]]:
     """
     Generator that yields:
       {"event": "summary", "data": {...}}
       {"event": "row",     "data": {...}}
       {"event": "done",    "data": {...}}
-
-    Use this with SSE / StreamingResponse so the frontend can append rows while LLM runs.
     """
     cfg = load_config(base_dir)
 
@@ -289,34 +397,39 @@ def run_pipeline_stream(base_dir: Path) -> Iterator[Dict[str, Any]]:
         cfg=cfg,
     )
 
-    validated_scored = add_uniqueness_and_rank(validated_df).copy()
+    validated_scored_full = add_uniqueness_and_rank(validated_df).copy()
+    validated_scored_full = _sort_for_generation(validated_scored_full)
+
+    validated_total = int(len(validated_scored_full))
+
+    validated_scored = _apply_cap(validated_scored_full, max_rows)
 
     enable_desc = bool(cfg.get("descriptions", {}).get("enable", False))
-    model = cfg.get("descriptions", {}).get("model", "llama3.1")
+    desc_model = cfg.get("descriptions", {}).get("model", "llama3.1")
 
-    # Emit an early summary so UI can render immediately
     summary_early = {
         "total_proposals": int(len(proposals_df)),
-        "validated": int(len(validated_scored)),
+        "validated_total": int(validated_total),
+        "validated_generated": int(len(validated_scored)),
+        "cap_applied": int(max_rows) if isinstance(max_rows, int) else None,
         "covered": int(len(coverage_df)),
         "dropped_naming": int(getattr(report, "dropped_naming", 0)),
         "dropped_underived_only": int(getattr(report, "dropped_underived_only", 0)),
         "dropped_net_new": int(getattr(report, "dropped_net_new", 0)),
         "collisions_resolved": int(getattr(report, "collisions_resolved", 0)),
         "phase": "streaming_rows",
+        "pricing_enabled": bool((cfg.get("pricing_model", {}) or {}).get("enable", False)),
     }
     yield {"event": "summary", "data": summary_early}
 
     streamed_rows: List[dict] = []
 
-    # Stream each row as we generate (or skip) descriptions
     for _, row in validated_scored.iterrows():
         r = row.to_dict()
 
         seg_name = clean(r.get("Proposed New Segment Name", ""))
         comps = clean(r.get("Non Derived Segments utilized", ""))
 
-        # cache hit?
         cache_key = f"{seg_name}|{comps}"
         if cache_key in DESCRIPTION_CACHE:
             desc = DESCRIPTION_CACHE[cache_key]
@@ -325,7 +438,7 @@ def run_pipeline_stream(base_dir: Path) -> Iterator[Dict[str, Any]]:
                 desc = generate_segment_description(
                     segment_name=seg_name,
                     components=comps,
-                    model=model,
+                    model=desc_model,
                 )
             else:
                 desc = ""
@@ -334,13 +447,13 @@ def run_pipeline_stream(base_dir: Path) -> Iterator[Dict[str, Any]]:
         r["Segment Description"] = desc
         streamed_rows.append(r)
 
-        # emit row immediately
         yield {"event": "row", "data": r}
 
-    # Final dataframes after streaming
-    validated_scored2 = pd.DataFrame(streamed_rows)
+    if not streamed_rows:
+        validated_scored2 = validated_scored.copy()
+    else:
+        validated_scored2 = pd.DataFrame(streamed_rows)
 
-    # Final summary stats once complete
     if "Proposed New Segment Name" in validated_scored2.columns:
         norm = validated_scored2["Proposed New Segment Name"].map(normalize_name)
         dup_within_norm = int(norm.duplicated().sum())
@@ -350,18 +463,20 @@ def run_pipeline_stream(base_dir: Path) -> Iterator[Dict[str, Any]]:
     uniq_stats = safe_quantiles(validated_scored2.get("uniqueness_score", pd.Series(dtype=float)))
     rank_stats = safe_quantiles(validated_scored2.get("rank_score", pd.Series(dtype=float)))
 
+    template_df = load_output_template(cfg)
+    final_df = build_final_from_template(validated_scored2, template_df)
+
+    final_df, pricing_error = _apply_pricing_if_enabled(base_dir, cfg, validated_scored2, final_df)
+
     summary_final = {
         **summary_early,
         "duplicates_within_output_normalized": int(dup_within_norm),
         "uniqueness_stats": uniq_stats,
         "rank_stats": rank_stats,
         "phase": "done",
+        "pricing_error": pricing_error,
     }
 
-    template_df = load_output_template(cfg)
-    final_df = build_final_from_template(validated_scored2, template_df)
-
-    # Emit done (frontend MUST set loading=false on this)
     yield {
         "event": "done",
         "data": {

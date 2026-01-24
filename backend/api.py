@@ -7,10 +7,10 @@ import time
 import uuid
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
@@ -22,7 +22,7 @@ SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 # now imports from backend/src work reliably
-from pipeline import run_pipeline, df_to_csv_bytes, run_pipeline_stream  # noqa: E402
+from pipeline import df_to_csv_bytes, run_pipeline, run_pipeline_stream  # noqa: E402
 
 
 app = FastAPI(title="Cybba Segment Expansion API", version="1.0")
@@ -78,14 +78,20 @@ def health() -> Dict[str, Any]:
 
 
 @app.post("/api/run")
-def run() -> Dict[str, Any]:
+def run(
+    max_rows: Optional[int] = Query(
+        default=None,
+        ge=1,
+        description="Cap the number of validated rows to generate (post-validation).",
+    ),
+) -> Dict[str, Any]:
     """
     Non-streaming run. Returns full rows at once.
     """
     _cleanup_runs()
 
     try:
-        result = run_pipeline(BASE_DIR)
+        result = run_pipeline(BASE_DIR, max_rows=max_rows)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -159,12 +165,18 @@ def download_csv(run_id: str, mode: str = "final"):
 
 
 @app.get("/api/run/stream")
-def run_stream():
+def run_stream(
+    max_rows: Optional[int] = Query(
+        default=None,
+        ge=1,
+        description="Cap the number of validated rows to stream/generate (post-validation).",
+    ),
+):
     """
     SSE stream. Use EventSource on the frontend (GET-only).
     Streams:
       event: run_id  -> run_id immediately (so downloads can be enabled)
-      event: summary -> early summary
+      event: summary -> early summary (includes validated_total/validated_generated)
       event: row     -> one row at a time
       event: done    -> final summary (+ run_id)
       event: error   -> error payload
@@ -182,7 +194,6 @@ def run_stream():
         final_rows_buffer: List[Dict[str, Any]] = []
         latest_summary: Dict[str, Any] = {}
 
-        # Optional: keep these if pipeline stream ever sends them
         coverage_rows: List[Dict[str, Any]] = []
         proposals_rows: List[Dict[str, Any]] = []
 
@@ -191,7 +202,7 @@ def run_stream():
             yield sse("run_id", {"run_id": run_id})
 
             # 2) stream pipeline events
-            for msg in run_pipeline_stream(BASE_DIR):
+            for msg in run_pipeline_stream(BASE_DIR, max_rows=max_rows):
                 ev = msg.get("event")
                 data = msg.get("data", {})
 
@@ -205,13 +216,11 @@ def run_stream():
                     yield sse("row", data)
 
                 elif ev == "coverage_row":
-                    # optional if you add this later
                     if isinstance(data, dict):
                         coverage_rows.append(data)
                     yield sse("coverage_row", data)
 
                 elif ev == "proposal_row":
-                    # optional if you add this later
                     if isinstance(data, dict):
                         proposals_rows.append(data)
                     yield sse("proposal_row", data)
@@ -221,29 +230,25 @@ def run_stream():
                     if isinstance(data, dict):
                         latest_summary = data.get("summary", latest_summary) or latest_summary
 
-                        # If pipeline sends complete lists, prefer them:
-                        if isinstance(data.get("rows"), list) and data["rows"]:
-                            rows_buffer = data["rows"]
-                        if isinstance(data.get("final_rows"), list) and data["final_rows"]:
-                            final_rows_buffer = data["final_rows"]
+                        # prefer complete lists if provided
+                        if isinstance(data.get("rows"), list):
+                            rows_buffer = data.get("rows") or rows_buffer
+                        if isinstance(data.get("final_rows"), list):
+                            final_rows_buffer = data.get("final_rows") or final_rows_buffer
 
-                        # Optional: accept these if you later include them
-                        if isinstance(data.get("coverage_rows"), list) and data["coverage_rows"]:
-                            coverage_rows = data["coverage_rows"]
-                        if isinstance(data.get("proposals_rows"), list) and data["proposals_rows"]:
-                            proposals_rows = data["proposals_rows"]
+                        if isinstance(data.get("coverage_rows"), list):
+                            coverage_rows = data.get("coverage_rows") or coverage_rows
+                        if isinstance(data.get("proposals_rows"), list):
+                            proposals_rows = data.get("proposals_rows") or proposals_rows
 
-                    # 3) build cached dataframes
+                    # build cached dataframes
                     validated_df = pd.DataFrame(rows_buffer)
                     validated_df = _sort_validated_for_ui(validated_df)
 
-                    # If final_rows weren't produced, fall back to validated rows
                     final_df = pd.DataFrame(final_rows_buffer) if final_rows_buffer else validated_df.copy()
-
                     coverage_df = pd.DataFrame(coverage_rows) if coverage_rows else pd.DataFrame()
                     proposals_df = pd.DataFrame(proposals_rows) if proposals_rows else pd.DataFrame()
 
-                    # 4) cache for download endpoint
                     RUNS[run_id] = {
                         "_created_ts": time.time(),
                         "summary": latest_summary,
@@ -253,24 +258,30 @@ def run_stream():
                         "proposals_df": proposals_df,
                     }
 
-                    # 5) tell UI we're done (run_id included)
-                    yield sse("done", {"run_id": run_id, "summary": latest_summary})
+                    yield sse(
+                        "done",
+                        {
+                            "run_id": run_id,
+                            "summary": latest_summary,
+                            "rows": rows_buffer,                # validated rows (optional)
+                            "final_rows": final_rows_buffer,    # ✅ priced template rows
+                        },
+                    )
                     return
 
+
                 else:
-                    # passthrough unknown events
                     yield sse(ev or "message", data)
 
         except Exception as e:
             yield sse("error", {"message": str(e), "run_id": run_id})
 
-    # IMPORTANT: disable buffering/caching for SSE
     return StreamingResponse(
         generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # helps when behind nginx
+            "X-Accel-Buffering": "no",
         },
     )

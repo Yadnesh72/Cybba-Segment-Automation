@@ -20,14 +20,19 @@ export type QuantileStats = {
 
 export interface RunSummary {
   total_proposals: number;
-  validated: number;
+  validated?: number; // legacy/non-capped runs
   covered: number;
+
+  // capping support
+  validated_total?: number; // before cap
+  validated_generated?: number; // after cap
+  cap_applied?: number | null;
 
   duplicates_within_output_normalized?: number;
 
   dropped_naming: number;
-  dropped_underived_only: number;
-  dropped_net_new: number;
+  dropped_underived_only?: number;
+  dropped_net_new?: number;
   collisions_resolved: number;
 
   uniqueness_stats?: QuantileStats;
@@ -48,23 +53,31 @@ export interface ValidatedRow {
   [key: string]: any;
 }
 
+/**
+ * Final output row (template-driven, includes pricing columns).
+ * Keep it loose because template may add/remove columns.
+ */
+export type FinalRow = Record<string, any>;
+
+/** When streaming, the backend may emit validated rows (row) and/or final rows (final_row) */
+export type StreamRowPayload = Record<string, any>;
+
 export interface RunResponse {
   run_id: string;
   summary: RunSummary;
   rows: ValidatedRow[];
+  // optional if you extend non-stream endpoint to return final rows too
+  final_rows?: FinalRow[];
 }
 
 /**
- * Option A backend emits:
- * - event: run_id  -> { run_id }
- * - event: summary -> RunSummary
- * - event: row     -> ValidatedRow
- * - event: done    -> { run_id, summary }
- * - event: error   -> { message, run_id? }
+ * Streaming done payload can include final_rows so the UI can show pricing.
  */
 export type StreamDonePayload = {
   run_id: string;
   summary: RunSummary;
+  rows?: ValidatedRow[];
+  final_rows?: FinalRow[];
 };
 
 export type StreamErrorPayload = {
@@ -76,8 +89,13 @@ export type StreamErrorPayload = {
    API calls (non-stream)
 ========================= */
 
-export async function runPipeline(): Promise<RunResponse> {
-  const res = await fetch(`${API_BASE}/api/run`, { method: "POST" });
+export async function runPipeline(max_rows?: number): Promise<RunResponse> {
+  const url =
+    typeof max_rows === "number" && max_rows > 0
+      ? `${API_BASE}/api/run?max_rows=${encodeURIComponent(max_rows)}`
+      : `${API_BASE}/api/run`;
+
+  const res = await fetch(url, { method: "POST" });
 
   if (!res.ok) {
     const text = await res.text();
@@ -103,14 +121,37 @@ export async function getRun(runId: string): Promise<RunResponse> {
 ========================= */
 
 export function runPipelineStream(opts: {
+  max_rows?: number; // backend expects this name
   onRunId?: (runId: string) => void;
   onSummary?: (summary: RunSummary) => void;
-  onRow?: (row: ValidatedRow) => void;
+
+  /**
+   * row event = validated row (today)
+   * Keep loose so UI doesn't break if backend adds pricing cols later.
+   */
+  onRow?: (row: StreamRowPayload) => void;
+
+  /**
+   * optional future event if you later stream final/priced rows separately
+   * (not required for current backend)
+   */
+  onFinalRow?: (row: FinalRow) => void;
+
   onDone?: (payload: StreamDonePayload) => void;
-  onError?: (message: string, payload?: StreamErrorPayload) => void;
+  onError?: (message: string) => void;
   onOpen?: () => void;
 }): () => void {
-  const url = `${API_BASE}/api/run/stream`;
+  const maxRows =
+    typeof opts.max_rows === "number" && opts.max_rows > 0
+      ? opts.max_rows
+      : undefined;
+
+  const url =
+    maxRows !== undefined
+      ? `${API_BASE}/api/run/stream?max_rows=${encodeURIComponent(maxRows)}`
+      : `${API_BASE}/api/run/stream`;
+
+  // EventSource is GET-only (matches backend)
   const es = new EventSource(url);
 
   const safeParse = (s: string) => {
@@ -121,16 +162,11 @@ export function runPipelineStream(opts: {
     }
   };
 
-  es.onopen = () => {
-    opts.onOpen?.();
-  };
+  es.onopen = () => opts.onOpen?.();
 
-  // run_id arrives immediately (Option A)
   es.addEventListener("run_id", (e: MessageEvent) => {
     const payload = safeParse(e.data);
-    if (payload?.run_id) {
-      opts.onRunId?.(payload.run_id as string);
-    }
+    if (payload?.run_id) opts.onRunId?.(payload.run_id);
   });
 
   es.addEventListener("summary", (e: MessageEvent) => {
@@ -138,20 +174,21 @@ export function runPipelineStream(opts: {
     if (payload) opts.onSummary?.(payload as RunSummary);
   });
 
+  // validated rows (current backend behavior)
   es.addEventListener("row", (e: MessageEvent) => {
     const payload = safeParse(e.data);
-    if (payload) opts.onRow?.(payload as ValidatedRow);
+    if (payload) opts.onRow?.(payload as StreamRowPayload);
   });
 
-  // Option A done payload: { run_id, summary }
+  // optional future event if you emit priced rows
+  es.addEventListener("final_row", (e: MessageEvent) => {
+    const payload = safeParse(e.data);
+    if (payload) opts.onFinalRow?.(payload as FinalRow);
+  });
+
   es.addEventListener("done", (e: MessageEvent) => {
     const payload = safeParse(e.data);
-    if (payload?.run_id) {
-      opts.onDone?.(payload as StreamDonePayload);
-    } else {
-      // still close the stream; treat as done
-      opts.onDone?.({ run_id: "", summary: (payload?.summary ?? {}) as RunSummary });
-    }
+    if (payload) opts.onDone?.(payload as StreamDonePayload);
     es.close();
   });
 
@@ -160,12 +197,12 @@ export function runPipelineStream(opts: {
     const payload = safeParse((e as any).data ?? "");
     const msg =
       payload?.message ||
-      "Streaming error event received. Check backend logs.";
-    opts.onError?.(msg, payload as StreamErrorPayload);
+      "Streaming connection error. Check backend logs and CORS.";
+    opts.onError?.(msg);
     es.close();
   });
 
-  // Network / CORS / disconnect error (EventSource-level)
+  // Also handle generic errors (network disconnect, etc.)
   es.onerror = () => {
     opts.onError?.("Streaming connection lost. Is the backend running?");
     es.close();
