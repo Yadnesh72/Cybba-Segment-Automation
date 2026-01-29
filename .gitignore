@@ -1,5 +1,8 @@
 # Large data files
 Data/Input/Raw_segments/*.csv
 
+backend/models/*.joblib
+backend/models/*.joblib_*
+
 # Virtual environment
 venv/
