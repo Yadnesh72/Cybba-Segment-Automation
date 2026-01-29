@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-train_taxonomy_model.py
 
-Trains 2 lightweight taxonomy classifiers (offline, no LLM):
-- L1 classifier
-- L2 classifier
-
-Learns from Cybba-formatted segment names like:
-  Cybba > L1 > L2 > Leaf
-
-Works with either:
-- Output_format.csv (uses columns: "New Segment Name", "Segment Description")
-- Data_Marketplace_Segments_for_Cybba.csv (often uses "Segment Name", "Segment Description")
-
-Key fix vs your error:
-- Uses stratified train/test split ONLY if every class has >= 2 samples
-  otherwise falls back to non-stratified split (so it won’t crash on rare classes).
-"""
 
 from __future__ import annotations
 

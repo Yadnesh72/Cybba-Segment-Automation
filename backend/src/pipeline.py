@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -18,10 +19,16 @@ from validators import validate_and_prepare
 from pricing_model import PRICE_COLS, PricingDefaults, load_pricing_model, predict_prices
 
 # ----------------------------
+# Logging (prints may be buffered; logging is safer)
+# ----------------------------
+logger = logging.getLogger("pipeline")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+# ----------------------------
 # In-memory cache for LLM descriptions (persists while FastAPI process is running)
 # ----------------------------
 DESCRIPTION_CACHE: Dict[str, str] = {}
-
 
 # ----------------------------
 # Config
@@ -243,12 +250,15 @@ def _resolve_model_path(base_dir: Path, model_path: str) -> Path:
     return p
 
 
-@lru_cache(maxsize=4)
-def _cached_pricing_model(model_path_abs: str):
-    """
-    Cache by absolute string path (stable).
-    """
+# ✅ FIX: cache includes file mtime (and size) so overwriting the model triggers reload
+@lru_cache(maxsize=16)
+def _cached_pricing_model(model_path_abs: str, mtime: float, size: int):
     return load_pricing_model(Path(model_path_abs))
+
+
+def _load_pricing_model_with_fingerprint(resolved: Path):
+    st = resolved.stat()
+    return _cached_pricing_model(str(resolved), float(st.st_mtime), int(st.st_size))
 
 
 def _apply_pricing_if_enabled(
@@ -264,31 +274,74 @@ def _apply_pricing_if_enabled(
     Returns (final_df, pricing_error_message_or_None).
     Never raises: we don't want to kill SSE streaming.
     """
+    logger.info("[pricing] ENTER _apply_pricing_if_enabled()")
+
     enabled, model_path, defaults = _pricing_config(cfg)
     if not enabled:
+        logger.info("[pricing] disabled in config")
         return final_df, None
 
     if not model_path:
-        return final_df, "pricing_model.enable=true but pricing_model.model_path is missing in config.yml"
+        msg = "pricing_model.enable=true but pricing_model.model_path is missing in config.yml"
+        logger.error("[pricing] %s", msg)
+        return final_df, msg
 
     if validated_scored is None or len(validated_scored) == 0:
+        logger.info("[pricing] no rows to price")
         return final_df, None
 
     try:
         resolved = _resolve_model_path(base_dir, model_path)
-        model = _cached_pricing_model(str(resolved))
+        if not resolved.exists():
+            msg = f"Pricing model not found at: {resolved}"
+            logger.error("[pricing] %s", msg)
+            return final_df, msg
 
+        st = resolved.stat()
+        logger.info(
+            "[pricing] model_path resolved to: %s (exists=True, mtime=%s, size=%s)",
+            resolved,
+            float(st.st_mtime),
+            int(st.st_size),
+        )
+
+        # ✅ always reloads after retrain overwrite (mtime/size changes)
+        model = _load_pricing_model_with_fingerprint(resolved)
+
+        logger.info("[pricing] calling predict_prices() on %d rows", len(validated_scored))
         prices_df = predict_prices(model, validated_scored, defaults=defaults)
+
+        # --- diagnostics that will actually show up ---
+        try:
+            desc = prices_df.describe(include="all")
+            logger.info("[pricing] describe:\n%s", desc.to_string())
+        except Exception as e:
+            logger.warning("[pricing] describe() failed: %s", e)
+
+        try:
+            nonzero_any = (prices_df != 0).any()
+            logger.info("[pricing] any nonzero?:\n%s", nonzero_any.to_string())
+            logger.info("[pricing] head:\n%s", prices_df.head(5).to_string(index=False))
+            try:
+                identical = bool((prices_df.nunique(dropna=False) <= 1).all())
+                logger.info("[pricing] all rows identical?: %s", identical)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("[pricing] nonzero/head diagnostics failed: %s", e)
 
         out = final_df.copy()
         for c in PRICE_COLS:
             if c in out.columns and c in prices_df.columns:
                 out[c] = prices_df[c]
+
         return out, None
 
     except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        logger.exception("[pricing] FAILED: %s", msg)
         # Do NOT crash streaming; surface error in summary
-        return final_df, f"{type(e).__name__}: {e}"
+        return final_df, msg
 
 
 # ----------------------------
@@ -314,11 +367,9 @@ def run_pipeline(base_dir: Path, max_rows: Optional[int] = None) -> Dict[str, An
     validated_scored_full = _sort_for_generation(validated_scored_full)
 
     validated_total = int(len(validated_scored_full))
-
     validated_scored = _apply_cap(validated_scored_full, max_rows)
 
     enable_desc = bool(cfg.get("descriptions", {}).get("enable", False))
-
     if enable_desc and len(validated_scored) > 0:
         descs = generate_descriptions(
             validated_scored,
@@ -401,7 +452,6 @@ def run_pipeline_stream(base_dir: Path, max_rows: Optional[int] = None) -> Itera
     validated_scored_full = _sort_for_generation(validated_scored_full)
 
     validated_total = int(len(validated_scored_full))
-
     validated_scored = _apply_cap(validated_scored_full, max_rows)
 
     enable_desc = bool(cfg.get("descriptions", {}).get("enable", False))

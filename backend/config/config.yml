@@ -80,8 +80,10 @@ descriptions:
 
 pricing_model:
   enable: true
-  model_path: "/Users/yadnesh/cybba/cybba_segment_automation/backend/models/pricing_model.joblib"
+  model_path: models/pricing_model.joblib
   defaults:
     provider_name: "Cybba"
     country: "USA"
     currency: "USD"
+
+

@@ -11,21 +11,21 @@ const PRICE_COLS = [
   "Advertiser Direct % of Media",
 ] as const;
 
-const PCT_COLS = new Set([
+const PCT_COLS = new Set<string>([
   "Programmatic % of Media",
   "Advertiser Direct % of Media",
 ]);
 
-const CPM_COLS = new Set([
+const CPM_COLS = new Set<string>([
   "Digital Ad Targeting Price (CPM)",
   "Content Marketing Price (CPM)",
   "TV Targeting Price (CPM)",
   "CPM Cap",
 ]);
 
-const CPC_COLS = new Set(["Cost Per Click"]);
+const CPC_COLS = new Set<string>(["Cost Per Click"]);
 
-const SCORE_COLS = new Set([
+const SCORE_COLS = new Set<string>([
   "rank_score",
   "uniqueness_score",
   "Composition Similarity",
@@ -96,8 +96,9 @@ export default function SegmentsTable({
     return "Proposed New Segment Name";
   }, [rows, hasFinal]);
 
-  const [sortKey, setSortKey] = useState<string>(() => defaultSortKey);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">(() =>
+  // ✅ important: keep state stable + sync when default changes between runs
+  const [sortKey, setSortKey] = useState<string>(defaultSortKey);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(
     defaultSortKey.includes("Name") ? "asc" : "desc"
   );
   const [pageSize, setPageSize] = useState(50);
@@ -114,7 +115,7 @@ export default function SegmentsTable({
       return base.filter((c) => rows.some((r) => r?.[c] !== undefined));
     }
 
-    // fallback for validated rows
+    // fallback for validated rows (no pricing yet)
     const fallback = [
       "Proposed New Segment Name",
       "Segment Description",
@@ -195,7 +196,8 @@ export default function SegmentsTable({
   const descCellStyle: React.CSSProperties = {
     color: "rgba(255,255,255,0.82)",
     lineHeight: 1.35,
-    maxWidth: 720, // ✅ more space now
+    maxWidth: 760, // ✅ more space now
+    whiteSpace: "normal",
   };
 
   const chipStyle: React.CSSProperties = {
@@ -214,13 +216,21 @@ export default function SegmentsTable({
   return (
     <>
       <div className="tableToolbar">
-        <div className="muted" style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
+        <div
+          className="muted"
+          style={{ display: "inline-flex", gap: 10, alignItems: "center" }}
+        >
           <span>
             Showing {Math.min(pageSize, rows.length)} / {rows.length}
           </span>
           {loading ? (
-            <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-              <span className="btnSpinner btnSpinnerShow" style={{ display: "inline-block" }} />
+            <span
+              style={{ display: "inline-flex", gap: 8, alignItems: "center" }}
+            >
+              <span
+                className="btnSpinner btnSpinnerShow"
+                style={{ display: "inline-block" }}
+              />
               <span>streaming…</span>
             </span>
           ) : null}
@@ -240,7 +250,10 @@ export default function SegmentsTable({
 
           <label className="miniField">
             Dir
-            <select value={sortDir} onChange={(e) => setSortDir(e.target.value as any)}>
+            <select
+              value={sortDir}
+              onChange={(e) => setSortDir(e.target.value as any)}
+            >
               <option value="desc">desc</option>
               <option value="asc">asc</option>
             </select>
@@ -248,7 +261,10 @@ export default function SegmentsTable({
 
           <label className="miniField">
             Rows
-            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+            >
               {[25, 50, 100, 250, 500].map((n) => (
                 <option key={n} value={n}>
                   {n}
