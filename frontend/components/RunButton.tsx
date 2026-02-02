@@ -9,13 +9,13 @@ export default function RunButton({
 }) {
   return (
     <button
-      type="button"                 // ✅ prevents form submit reload
+      type="button" // prevents form submit reload
       className="btnPrimary"
       onClick={onClick}
       disabled={loading}
     >
       <span className={`btnSpinner ${loading ? "btnSpinnerShow" : ""}`} />
-      {loading ? "Running…" : "Run Pipeline"}
+      {loading ? "Generating…" : "Generate"}
     </button>
   );
 }

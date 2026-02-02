@@ -1,5 +1,5 @@
+/*
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import ReactDOM from "react-dom";
 import { downloadCsv, runPipelineStream, RunSummary, getRun } from "./api";
 import DownloadButton from "../components/DownloadButton";
 import SegmentsTable from "../components/SegmentsTable";
@@ -39,82 +39,7 @@ function rowKey(r: Record<string, any>) {
   ).trim();
 }
 
-/** ---------------- Tooltip (cursor-follow, portal, no-flicker) ---------------- */
-type TipState = {
-  title: string;
-  body: string;
-  x: number;
-  y: number;
-} | null;
 
-function TooltipPortal({ tip }: { tip: TipState }) {
-  const [mounted, setMounted] = useState(false);
-  const [pos, setPos] = useState({ left: 0, top: 0 });
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    setMounted(true);
-    return () => {
-      setMounted(false);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!tip) return;
-
-    // Use rAF so rapid mousemove doesn't cause layout thrash/flicker
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      const pad = 12;
-      const gap = 14;
-
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-
-      const width = 340; // stable width gives stable positioning
-      const estH = 92; // good enough for flip logic (title + 2 lines)
-
-      let left = tip.x + gap;
-      let top = tip.y + gap;
-
-      // clamp right
-      left = clamp(left, pad, vw - width - pad);
-
-      // flip above cursor if near bottom
-      if (top + estH > vh - pad) {
-        top = clamp(tip.y - gap - estH, pad, vh - estH - pad);
-      }
-
-      setPos({ left, top });
-    });
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [tip?.x, tip?.y, tip?.title, tip?.body]);
-
-  if (!mounted) return null;
-
-  const node = (
-    <div
-      className={`kpiTip ${tip ? "kpiTipShow" : ""}`}
-      style={{
-        left: pos.left,
-        top: pos.top,
-      }}
-      role="tooltip"
-      aria-hidden={!tip}
-    >
-      <div className="kpiTipTitle">{tip?.title ?? ""}</div>
-      <div className="kpiTipBody">{tip?.body ?? ""}</div>
-    </div>
-  );
-
-  return ReactDOM.createPortal(node, document.body);
-}
-
-/** ---------- KPI strip ---------- */
 function KpiStrip({
   runId,
   rows,
@@ -143,166 +68,34 @@ function KpiStrip({
   );
 
   const tiles = [
-    {
-      label: "Run",
-      value: runId ? runId : "—",
-      hint: `rows: ${rows.length}`,
-      tipTitle: "Run",
-      tipBody: "Unique run identifier for this generation. Useful for downloads and debugging.",
-    },
-    {
-      label: "Rank avg",
-      value: fmt3(rankAvg),
-      hint: "quality",
-      tipTitle: "Rank average",
-      tipBody: "Average rank score across displayed rows. Higher usually indicates better overall segment quality.",
-    },
-    {
-      label: "Uniq avg",
-      value: fmt3(uniqAvg),
-      hint: "novelty",
-      tipTitle: "Uniqueness average",
-      tipBody: "Average uniqueness score. Higher means segments are more distinct / less redundant.",
-    },
-    {
-      label: "Comp avg",
-      value: fmt3(compAvg),
-      hint: "composition",
-      tipTitle: "Composition similarity",
-      tipBody: "Average similarity to the intended composition features. Higher means closer to the target structure.",
-    },
-    {
-      label: "Closest avg",
-      value: fmt3(closestAvg),
-      hint: "closest",
-      tipTitle: "Closest similarity",
-      tipBody: "Average similarity to the nearest existing Cybba segment. Lower can imply more net-new segments.",
-    },
+    { label: "Run", value: runId ? runId : "—", hint: `rows: ${rows.length}` },
+    { label: "Rank avg", value: fmt3(rankAvg), hint: "quality" },
+    { label: "Uniq avg", value: fmt3(uniqAvg), hint: "novelty" },
+    { label: "Comp avg", value: fmt3(compAvg), hint: "composition" },
+    { label: "Closest avg", value: fmt3(closestAvg), hint: "closest" },
   ];
 
-  // tooltip state + delayed show for polish
-  const [tip, setTip] = useState<TipState>(null);
-  const showTimerRef = useRef<number | null>(null);
-  const lastMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  const clearShowTimer = () => {
-    if (showTimerRef.current) {
-      window.clearTimeout(showTimerRef.current);
-      showTimerRef.current = null;
-    }
-  };
-
-  const requestShow = (title: string, body: string) => {
-    clearShowTimer();
-    showTimerRef.current = window.setTimeout(() => {
-      setTip({
-        title,
-        body,
-        x: lastMouseRef.current.x,
-        y: lastMouseRef.current.y,
-      });
-    }, 120); // ✅ show delay
-  };
-
-  const hide = () => {
-    clearShowTimer();
-    setTip(null); // fade-out handled by CSS transition
-  };
-
-  useEffect(() => {
-    return () => {
-      clearShowTimer();
-    };
-  }, []);
-
   return (
-    <>
-      <TooltipPortal tip={tip} />
-
-      <section className="metricsStrip fadeInUp">
-        {tiles.map((t) => (
-          <div
-            key={t.label}
-            className="metricTile"
-            onMouseEnter={(e) => {
-              lastMouseRef.current = { x: e.clientX, y: e.clientY };
-              requestShow(t.tipTitle, t.tipBody);
-            }}
-            onMouseMove={(e) => {
-              lastMouseRef.current = { x: e.clientX, y: e.clientY };
-              // update position only if tip is already visible (prevents flicker)
-              setTip((prev) =>
-                prev ? { ...prev, x: e.clientX, y: e.clientY } : prev
-              );
-            }}
-            onMouseLeave={hide}
-          >
-            <div className="metricLabel">{t.label}</div>
-
-            <div className="metricValue">
-              {t.value}
-              {streaming && t.label === "Run" ? (
-                <span style={{ marginLeft: 10, display: "inline-flex", gap: 8, alignItems: "center" }}>
-                  <span className="miniSpinner" />
-                </span>
-              ) : null}
-            </div>
-
-            <div className="metricHint">{t.hint}</div>
+    <section className="metricsStrip fadeInUp">
+      {tiles.map((t) => (
+        <div key={t.label} className="metricTile">
+          <div className="metricLabel">{t.label}</div>
+          <div className="metricValue">
+            {t.value}
+            {streaming && t.label === "Run" ? (
+              <span style={{ marginLeft: 10, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                <span className="miniSpinner" />
+              </span>
+            ) : null}
           </div>
-        ))}
-      </section>
-
-      {/* Tooltip CSS (scoped via classes, no arrows, glass blur, high z-index) */}
-      <style>{`
-        .kpiTip{
-          position: fixed;
-          z-index: 999999;
-          width: 340px;
-          max-width: min(340px, calc(100vw - 24px));
-          padding: 12px 14px;
-          border-radius: 14px;
-          border: 1px solid rgba(255,255,255,0.10);
-          background: rgba(12, 16, 28, 0.55);
-          backdrop-filter: blur(14px);
-          -webkit-backdrop-filter: blur(14px);
-          box-shadow:
-            0 18px 50px rgba(0,0,0,0.42),
-            0 0 0 1px rgba(255,255,255,0.04) inset;
-          pointer-events: none;
-
-          opacity: 0;
-          transform: translateY(6px) scale(0.98);
-          transition: opacity 160ms ease, transform 180ms ease;
-        }
-        .kpiTipShow{
-          opacity: 1;
-          transform: translateY(0px) scale(1);
-        }
-        .kpiTipTitle{
-          font-weight: 900;
-          font-size: 13px;
-          letter-spacing: -0.2px;
-          margin-bottom: 6px;
-          color: rgba(255,255,255,0.92);
-        }
-        .kpiTipBody{
-          font-size: 12.5px;
-          line-height: 1.35;
-          color: rgba(255,255,255,0.78);
-        }
-
-        /* ✅ ensure NO arrow even if global tooltip styles exist */
-        .kpiTip::before, .kpiTip::after{
-          content: none !important;
-          display: none !important;
-        }
-      `}</style>
-    </>
+          <div className="metricHint">{t.hint}</div>
+        </div>
+      ))}
+    </section>
   );
 }
 
-/** ---------- Modal (slider w/ built-in stamps, clickable) ---------- */
+
 function GenerateModal({
   open,
   disabled,
@@ -382,19 +175,26 @@ function GenerateModal({
               onChange={(e) => setValue(Number(e.target.value))}
             />
 
-            {/* ✅ clickable shortcut ticks */}
-            <div className="rsLabels" aria-hidden={false}>
+            {}
+            <div className="rsLabels" style={{ pointerEvents: "auto" }}>
               {stamps.map((s) => {
                 const p = ((s - min) / Math.max(1, max - min)) * 100;
                 return (
                   <button
                     key={s}
                     type="button"
-                    className="rsLabelBtn"
-                    style={{ left: `${p}%` }}
+                    className="rsLabel"
+                    style={{
+                      left: `${p}%`,
+                      cursor: disabled ? "default" : "pointer",
+                      background: "transparent",
+                      border: "none",
+                      padding: 0,
+                      pointerEvents: "auto",
+                    }}
                     onClick={() => setToStamp(s)}
                     disabled={disabled}
-                    aria-label={`Set segments to ${s}`}
+                    aria-label={`Set to ${s}`}
                     title={`Set to ${s}`}
                   >
                     {s}
@@ -402,36 +202,6 @@ function GenerateModal({
                 );
               })}
             </div>
-
-            <style>{`
-              .rsLabels{
-                position: relative;
-                height: 22px;
-                margin-top: 2px;
-              }
-              .rsLabelBtn{
-                position: absolute;
-                top: 0;
-                transform: translateX(-50%);
-                background: transparent;
-                border: none;
-                padding: 0;
-                color: rgba(255,255,255,0.70);
-                font-weight: 800;
-                font-size: 12px;
-                letter-spacing: 0.2px;
-                cursor: pointer;
-                transition: color 140ms ease, transform 140ms ease;
-              }
-              .rsLabelBtn:hover{
-                color: rgba(255,255,255,0.92);
-                transform: translateX(-50%) translateY(-1px);
-              }
-              .rsLabelBtn:disabled{
-                opacity: 0.45;
-                cursor: default;
-              }
-            `}</style>
 
             <div className="modalPlayRow">
               <button className="playBtnGreen" disabled={disabled} onClick={() => onConfirm(value)} type="button">
@@ -446,7 +216,7 @@ function GenerateModal({
   );
 }
 
-/** ---------- App ---------- */
+
 export default function App() {
   const [streaming, setStreaming] = useState(false);
 
@@ -592,19 +362,23 @@ export default function App() {
         if (Number.isFinite(total) && total > 0) setAvailableValidated(total);
       },
 
-      // ✅ Do NOT stop SSE when UI cap is reached (we still need onDone for pricing)
+      // ✅ FIX: do NOT stop the stream when we hit the UI cap.
+      // Just stop *appending* after limit. Keep SSE alive so we receive "done" (pricing).
       onRow: (row) => {
         if (myToken !== tokenRef.current) return;
 
         const limit = targetRef.current;
+
         const k = rowKey(row);
         if (!k || seenRef.current.has(k)) return;
         seenRef.current.add(k);
 
         setRows((prev) => {
-          if (prev.length >= limit) return prev;
+          if (prev.length >= limit) return prev; // ignore extras
           return [...prev, row];
         });
+
+        // ❌ removed stopStream()/setStreaming(false) here on purpose
       },
 
       onDone: (payload) => {
@@ -785,3 +559,4 @@ export default function App() {
     </div>
   );
 }
+  */

@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import ReactDOM from "react-dom";
 
 /** Pricing columns (final output) */
 const PRICE_COLS = [
@@ -25,16 +26,10 @@ const CPM_COLS = new Set<string>([
 
 const CPC_COLS = new Set<string>(["Cost Per Click"]);
 
-const SCORE_COLS = new Set<string>([
-  "rank_score",
-  "uniqueness_score",
-  "Composition Similarity",
-  "Closest Cybba Similarity",
-]);
-
-/** ✅ UI-only abbreviations (does NOT affect CSV output) */
+/** UI-only abbreviations */
 const COL_LABELS: Record<string, string> = {
   "New Segment Name": "Segment",
+  "Proposed New Segment Name": "Segment",
   "Segment Description": "Description",
 
   "Digital Ad Targeting Price (CPM)": "D-CPM",
@@ -44,11 +39,51 @@ const COL_LABELS: Record<string, string> = {
   "Programmatic % of Media": "Prog%",
   "CPM Cap": "Cap",
   "Advertiser Direct % of Media": "Direct%",
+};
 
-  rank_score: "Rank",
-  uniqueness_score: "Uniq",
-  "Composition Similarity": "Comp",
-  "Closest Cybba Similarity": "Closest",
+/** Header tooltip text */
+const COL_TIPS: Record<string, { title: string; body: string }> = {
+  "New Segment Name": {
+    title: "Segment",
+    body: "Generated segment name. Primary identifier used for sorting and merging priced results.",
+  },
+  "Proposed New Segment Name": {
+    title: "Segment",
+    body: "Generated segment name (validated stage). This becomes the final segment name after pricing/export.",
+  },
+  "Segment Description": {
+    title: "Description",
+    body: "Short explanation of the audience definition used to generate and price the segment.",
+  },
+
+  "Digital Ad Targeting Price (CPM)": {
+    title: "Digital Ad Targeting (CPM)",
+    body: "Estimated CPM for digital audience targeting inventory for this segment.",
+  },
+  "Content Marketing Price (CPM)": {
+    title: "Content Marketing (CPM)",
+    body: "Estimated CPM for content marketing / native inventory for this segment.",
+  },
+  "TV Targeting Price (CPM)": {
+    title: "TV Targeting (CPM)",
+    body: "Estimated CPM for addressable / targeted TV inventory for this segment.",
+  },
+  "Cost Per Click": {
+    title: "Cost Per Click (CPC)",
+    body: "Estimated average CPC for campaigns targeting this segment.",
+  },
+  "Programmatic % of Media": {
+    title: "Programmatic %",
+    body: "Estimated share of media expected to be programmatic for this segment.",
+  },
+  "CPM Cap": {
+    title: "CPM Cap",
+    body: "Estimated recommended CPM cap (upper bound) to control average CPM for this segment.",
+  },
+  "Advertiser Direct % of Media": {
+    title: "Advertiser Direct %",
+    body: "Estimated share of media expected to be bought direct (non-programmatic) for this segment.",
+  },
 };
 
 function toNum(v: any): number | null {
@@ -57,7 +92,6 @@ function toNum(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** ✅ Prices should show $ */
 function fmtMoney(v: any, digits: number): string {
   const n = toNum(v);
   if (n === null) return "";
@@ -70,10 +104,133 @@ function fmtPct(v: any): string {
   return `${Math.round(n)}%`;
 }
 
-function fmtScore(v: any): string {
-  const n = toNum(v);
-  if (n === null) return "";
-  return n.toFixed(3);
+/** ---------------- Tooltip (cursor-follow, portal, no-flicker) ---------------- */
+type TipState = {
+  title: string;
+  body: string;
+  x: number;
+  y: number;
+} | null;
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function TooltipPortal({ tip }: { tip: TipState }) {
+  const [mounted, setMounted] = useState(false);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+    return () => {
+      setMounted(false);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!tip) return;
+
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      const pad = 12;
+      const gap = 14;
+
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      const width = 340;
+      const estH = 96;
+
+      let left = tip.x + gap;
+      let top = tip.y + gap;
+
+      left = clamp(left, pad, vw - width - pad);
+      if (top + estH > vh - pad) {
+        top = clamp(tip.y - gap - estH, pad, vh - estH - pad);
+      }
+
+      setPos({ left, top });
+    });
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [tip?.x, tip?.y, tip?.title, tip?.body]);
+
+  if (!mounted) return null;
+
+  const node = (
+    <div
+      className={`kpiTip ${tip ? "kpiTipShow" : ""}`}
+      style={{ left: pos.left, top: pos.top }}
+      role="tooltip"
+      aria-hidden={!tip}
+    >
+      <div className="kpiTipTitle">{tip?.title ?? ""}</div>
+      <div className="kpiTipBody">{tip?.body ?? ""}</div>
+
+      <style>{`
+        .kpiTip{
+          position: fixed;
+          z-index: 999999;
+          width: 340px;
+          max-width: min(340px, calc(100vw - 24px));
+          padding: 12px 14px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(12, 16, 28, 0.55);
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          box-shadow:
+            0 18px 50px rgba(0,0,0,0.42),
+            0 0 0 1px rgba(255,255,255,0.04) inset;
+          pointer-events: none;
+
+          opacity: 0;
+          transform: translateY(6px) scale(0.985);
+          transition: opacity 160ms ease, transform 180ms ease;
+        }
+        .kpiTipShow{
+          opacity: 1;
+          transform: translateY(0px) scale(1);
+        }
+        .kpiTipTitle{
+          font-weight: 900;
+          font-size: 13px;
+          letter-spacing: -0.2px;
+          margin-bottom: 6px;
+          color: rgba(255,255,255,0.92);
+        }
+        .kpiTipBody{
+          font-size: 12.5px;
+          line-height: 1.35;
+          color: rgba(255,255,255,0.78);
+        }
+        .kpiTip::before, .kpiTip::after{
+          content: none !important;
+          display: none !important;
+        }
+
+        /* Header hover target */
+        .thHover{
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          cursor: help;
+          user-select: none;
+          color: rgba(255,255,255,0.88);
+        }
+        .thHover:hover{
+          color: rgba(255,255,255,0.98);
+          text-decoration: none;
+        }
+      `}</style>
+    </div>
+  );
+
+  return ReactDOM.createPortal(node, document.body);
 }
 
 export default function SegmentsTable({
@@ -83,67 +240,58 @@ export default function SegmentsTable({
   rows: Record<string, any>[];
   loading: boolean;
 }) {
-  const hasFinal = useMemo(
-    () => rows.some((r) => r?.["New Segment Name"] !== undefined),
-    [rows]
-  );
+  const [tip, setTip] = useState<TipState>(null);
+  const showTimerRef = useRef<number | null>(null);
+  const lastMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const defaultSortKey = useMemo(() => {
-    if (rows.some((r) => r?.["Digital Ad Targeting Price (CPM)"] !== undefined))
-      return "Digital Ad Targeting Price (CPM)";
-    if (rows.some((r) => r?.rank_score !== undefined)) return "rank_score";
-    if (hasFinal) return "New Segment Name";
-    return "Proposed New Segment Name";
-  }, [rows, hasFinal]);
+  const clearShowTimer = () => {
+    if (showTimerRef.current) {
+      window.clearTimeout(showTimerRef.current);
+      showTimerRef.current = null;
+    }
+  };
 
-  // ✅ important: keep state stable + sync when default changes between runs
+  const requestShow = (title: string, body: string) => {
+    clearShowTimer();
+    showTimerRef.current = window.setTimeout(() => {
+      setTip({ title, body, x: lastMouseRef.current.x, y: lastMouseRef.current.y });
+    }, 120);
+  };
+
+  const hide = () => {
+    clearShowTimer();
+    setTip(null);
+  };
+
+  useEffect(() => {
+    return () => clearShowTimer();
+  }, []);
+
+  // if we have "New Segment Name" we’re in final/priced shape; otherwise validated shape
+  const nameKey = useMemo(() => {
+    return rows.some((r) => r?.["New Segment Name"] != null)
+      ? "New Segment Name"
+      : "Proposed New Segment Name";
+  }, [rows]);
+
+  const columns = useMemo(() => {
+    // Always show pricing columns from the start (blank until present)
+    return [nameKey, "Segment Description", ...PRICE_COLS] as string[];
+  }, [nameKey]);
+
+  const defaultSortKey = useMemo(() => "Digital Ad Targeting Price (CPM)", []);
   const [sortKey, setSortKey] = useState<string>(defaultSortKey);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">(
-    defaultSortKey.includes("Name") ? "asc" : "desc"
-  );
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [pageSize, setPageSize] = useState(50);
 
   useEffect(() => {
     setSortKey(defaultSortKey);
-    setSortDir(defaultSortKey.includes("Name") ? "asc" : "desc");
+    setSortDir("desc");
   }, [defaultSortKey]);
 
-  /** ✅ Columns: show pricing + description, hide "Non Derived Segments utilized" */
-  const columns = useMemo(() => {
-    if (hasFinal) {
-      const base = ["New Segment Name", "Segment Description", ...PRICE_COLS];
-      return base.filter((c) => rows.some((r) => r?.[c] !== undefined));
-    }
-
-    // fallback for validated rows (no pricing yet)
-    const fallback = [
-      "Proposed New Segment Name",
-      "Segment Description",
-      "rank_score",
-      "uniqueness_score",
-      "Composition Similarity",
-      "Closest Cybba Similarity",
-    ];
-    return fallback.filter((c) => rows.some((r) => r?.[c] !== undefined));
-  }, [rows, hasFinal]);
-
   const sortOptions = useMemo(() => {
-    const opts: string[] = [];
-
-    if (rows.some((r) => r?.["New Segment Name"] !== undefined))
-      opts.push("New Segment Name");
-    if (rows.some((r) => r?.["Proposed New Segment Name"] !== undefined))
-      opts.push("Proposed New Segment Name");
-
-    for (const c of PRICE_COLS) {
-      if (rows.some((r) => r?.[c] !== undefined)) opts.push(c);
-    }
-    for (const c of Array.from(SCORE_COLS)) {
-      if (rows.some((r) => r?.[c] !== undefined)) opts.push(c);
-    }
-
-    return Array.from(new Set(opts));
-  }, [rows]);
+    return [nameKey, ...PRICE_COLS] as string[];
+  }, [nameKey]);
 
   const sorted = useMemo(() => {
     const copy = [...rows];
@@ -160,8 +308,9 @@ export default function SegmentsTable({
         return 0;
       }
 
-      if (an !== null && bn === null) return sortDir === "asc" ? -1 : 1;
-      if (an === null && bn !== null) return sortDir === "asc" ? 1 : -1;
+      // put numeric values first
+      if (an !== null && bn === null) return -1;
+      if (an === null && bn !== null) return 1;
 
       const as = String(av ?? "").toLowerCase();
       const bs = String(bv ?? "").toLowerCase();
@@ -174,7 +323,6 @@ export default function SegmentsTable({
 
   const visible = useMemo(() => sorted.slice(0, pageSize), [sorted, pageSize]);
 
-  // ✅ skeleton only when no rows yet
   if (loading && rows.length === 0) {
     return (
       <div className="tableSkeleton">
@@ -196,7 +344,7 @@ export default function SegmentsTable({
   const descCellStyle: React.CSSProperties = {
     color: "rgba(255,255,255,0.82)",
     lineHeight: 1.35,
-    maxWidth: 760, // ✅ more space now
+    maxWidth: 760,
     whiteSpace: "normal",
   };
 
@@ -215,22 +363,16 @@ export default function SegmentsTable({
 
   return (
     <>
+      <TooltipPortal tip={tip} />
+
       <div className="tableToolbar">
-        <div
-          className="muted"
-          style={{ display: "inline-flex", gap: 10, alignItems: "center" }}
-        >
+        <div className="muted" style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
           <span>
             Showing {Math.min(pageSize, rows.length)} / {rows.length}
           </span>
           {loading ? (
-            <span
-              style={{ display: "inline-flex", gap: 8, alignItems: "center" }}
-            >
-              <span
-                className="btnSpinner btnSpinnerShow"
-                style={{ display: "inline-block" }}
-              />
+            <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+              <span className="btnSpinner btnSpinnerShow" style={{ display: "inline-block" }} />
               <span>streaming…</span>
             </span>
           ) : null}
@@ -250,10 +392,7 @@ export default function SegmentsTable({
 
           <label className="miniField">
             Dir
-            <select
-              value={sortDir}
-              onChange={(e) => setSortDir(e.target.value as any)}
-            >
+            <select value={sortDir} onChange={(e) => setSortDir(e.target.value as any)}>
               <option value="desc">desc</option>
               <option value="asc">asc</option>
             </select>
@@ -261,10 +400,7 @@ export default function SegmentsTable({
 
           <label className="miniField">
             Rows
-            <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-            >
+            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
               {[25, 50, 100, 250, 500].map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -279,20 +415,45 @@ export default function SegmentsTable({
         <table className="table">
           <thead>
             <tr>
-              {columns.map((c) => (
-                <th key={c} title={c}>
-                  {COL_LABELS[c] ?? c}
-                </th>
-              ))}
+              {columns.map((c) => {
+                const tipDef = COL_TIPS[c];
+                const label = COL_LABELS[c] ?? c;
+
+                // If we don't have a tooltip definition, just render the label normally
+                if (!tipDef) {
+                  return (
+                    <th key={c} title={c}>
+                      {label}
+                    </th>
+                  );
+                }
+
+                // Hover target = the header label itself
+                return (
+                  <th key={c} title={c}>
+                    <span
+                      className="thHover"
+                      onMouseEnter={(e) => {
+                        lastMouseRef.current = { x: e.clientX, y: e.clientY };
+                        requestShow(tipDef.title, tipDef.body);
+                      }}
+                      onMouseMove={(e) => {
+                        lastMouseRef.current = { x: e.clientX, y: e.clientY };
+                        setTip((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
+                      }}
+                      onMouseLeave={() => hide()}
+                    >
+                      {label}
+                    </span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
 
           <tbody>
             {visible.map((r, idx) => {
-              const key =
-                r?.["New Segment Name"] ??
-                r?.["Proposed New Segment Name"] ??
-                `${idx}`;
+              const key = String(r?.[nameKey] ?? idx);
 
               return (
                 <tr key={key}>
@@ -315,7 +476,7 @@ export default function SegmentsTable({
                       );
                     }
 
-                    // ✅ money formatting
+                    // money formatting
                     if (CPM_COLS.has(c)) {
                       return (
                         <td key={c}>
@@ -330,19 +491,10 @@ export default function SegmentsTable({
                         </td>
                       );
                     }
-
                     if (PCT_COLS.has(c)) {
                       return (
                         <td key={c}>
                           <span style={chipStyle}>{fmtPct(v)}</span>
-                        </td>
-                      );
-                    }
-
-                    if (SCORE_COLS.has(c)) {
-                      return (
-                        <td key={c}>
-                          <span style={chipStyle}>{fmtScore(v)}</span>
                         </td>
                       );
                     }
