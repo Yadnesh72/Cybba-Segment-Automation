@@ -1,0 +1,250 @@
+paths:
+  base_dir: "Data"
+  input_dir: "/app/Data/Input/Raw_segments"
+  output_dir: "/app/Data/Output/Segment_Expansion"
+
+files:
+  input_a: "Data_Marketplace_Full_Catalog.csv"
+  input_b: "Data_Marketplace_Segments_for_Cybba.csv"
+  output_format: "Output_format.csv"
+
+provider:
+  cybba_name: "Cybba"
+
+# -------------------------------------------------
+# TAXONOMY (Generator-level behavior)
+# -------------------------------------------------
+taxonomy:
+  separator: " > "
+  strip_leading_asterisks: true
+
+  # No forced gating
+  use_taxonomy_gating: false
+  fallback_to_all_underived_if_missing_taxonomy: false
+
+  output_max_levels: 2
+  expected_total_nodes: 4
+
+  # Nearest neighbor similarity threshold
+  nn_min_similarity: 0.35
+
+  # L1 confidence threshold (used by generator + pipeline)
+  l1_min_confidence: 0.60
+
+  # Synonyms only normalize, do NOT restrict learning
+  l1_synonyms:
+    b2b intent: "B2B Audience"
+    b2b: "B2B Audience"
+    business intent: "B2B Audience"
+    alarisb2b: "B2B Audience"
+    alaris b2b: "B2B Audience"
+    cybba: ""
+
+  # -------------------------------------------------
+  # IMPORTANT: OPEN-WORLD L2 BEHAVIOR
+  # -------------------------------------------------
+
+  # These mappings exist but are NOT automatically used.
+  # They will ONLY apply if generator explicitly enables fallback.
+  default_l2_by_l1: {}
+
+  # Explicitly disable hard L2 fallback behaviors
+  enable_l2_cfg_default_fallback: false
+  enable_l2_catalog_fallback: false
+
+  # No rule-based path inference (model-first only)
+  enable_path_inference: false
+
+  # No hard B2B guardrail
+  enable_decision_maker_b2b_guardrail: false
+
+  # Leaf suffix behavior controlled by generator logic
+  enable_b2b_leaf_suffixes: false
+
+
+# -------------------------------------------------
+# NAMING
+# -------------------------------------------------
+naming:
+  provider_prefix: true
+  taxonomy_levels: 2
+  leaf_source_order: ["competitor", "underived", "fallback"]
+  leaf_audience_suffix: true
+  drop_if_leaf_looks_like_code: true
+
+
+# -------------------------------------------------
+# TF-IDF MODEL
+# -------------------------------------------------
+model:
+  embedding: "tfidf"
+  tfidf:
+    ngram_min: 1
+    ngram_max: 2
+    stop_words: "english"
+    min_df: 2
+    max_features: 50000
+
+
+# -------------------------------------------------
+# GENERATION SETTINGS
+# -------------------------------------------------
+generation:
+  max_proposals: 500
+  max_components: 2
+  retrieval_pool_size: 20
+  max_candidates_from_A: 5000
+
+  # Fully open-world (no forced fallback L1/L2)
+  fallback_l1: null
+  fallback_l2: null
+  fallback_to_first_allowed_category_if_missing_taxonomy: false
+
+  # Similarity guard
+  min_composition_similarity: 0.15
+
+  # Category gating OFF
+  use_allowed_categories_gating: false
+  allowed_categories_default: []
+
+
+# -------------------------------------------------
+# COVERAGE (existing segment detection)
+# -------------------------------------------------
+coverage:
+  enable: true
+  cover_threshold: 0.85
+  review_threshold: 0.85
+
+
+# -------------------------------------------------
+# DEDUPLICATION
+# -------------------------------------------------
+dedupe:
+  near_duplicate_threshold: 0.93
+  resolve_name_collision: true
+  collision_hash_len: 8
+
+
+# -------------------------------------------------
+# UNDERIVED ID STRATEGY
+# -------------------------------------------------
+underived_id:
+  strategy: "field_value"
+  field_id_col: "LiveRamp Field ID"
+  value_id_col: "LiveRamp Value ID"
+  fallback_segment_id_col: "LiveRamp Segment ID"
+
+
+# -------------------------------------------------
+# TRAINING
+# -------------------------------------------------
+training:
+  taxonomy_train_files:
+    - taxonomy_training_prepared.csv.gz
+  model_dir: "Data/Models"
+
+
+# -------------------------------------------------
+# DESCRIPTIONS (LLM)
+# -------------------------------------------------
+descriptions:
+  enable: true
+  model: "llama3.1"
+  batch_size: 20
+  ollama_url: "http://host.docker.internal:11434/api/generate"
+
+
+llm_generation:
+  enable: true
+  model: "llama3.1"
+  batch_size: 20
+  max_workers: 6
+  timeout_seconds: 45
+  ollama_url: "http://host.docker.internal:11434/api/generate"
+
+analytics_llm:
+  enable: true
+  model: "llama3.2-vision"
+  ollama_url: "http://host.docker.internal:11434/api/generate"
+# -------------------------------------------------
+# PRICING MODEL
+# -------------------------------------------------
+pricing_model:
+  enable: true
+  model_path: models/pricing_model.joblib
+  defaults:
+    provider_name: "Cybba"
+    country: "USA"
+    currency: "USD"
+
+
+# -------------------------------------------------
+# TAXONOMY MODEL (Pipeline-level refinement)
+# -------------------------------------------------
+taxonomy_model:
+  enable: true
+
+  # L1 classifier
+  l1_model_path: "/app/Data/Models/cybba_taxonomy_L1.joblib"
+
+  # L2 retriever
+  l2_model_path: "/app/Data/Models/cybba_taxonomy_L2.joblib"
+  l2_top_k: 5
+  l2_min_similarity: 0.25
+
+  # Leaf model (if used later)
+  leaf_model_path: "/app/Data/Models/cybba_taxonomy_Leaf.joblib"
+  leaf_top_k: 10
+  leaf_min_similarity: 0.20
+
+  # Vertical fallback behavior (B2B → industry)
+  vertical_min_confidence: 0.45
+
+  # IMPORTANT:
+  # Do NOT override generator taxonomy.
+  # Only fill blanks.
+  overwrite_existing_taxonomy: false
+
+
+# -------------------------------------------------
+# OUTPUT
+# -------------------------------------------------
+output:
+  template_file: "Output_format.csv"
+  proposals_filename: "proposals.csv"
+  proposals_validated_filename: "proposals_validated.csv"
+  final_filename: "Cybba_New_Additional_Segments.csv"
+  coverage_filename: "coverage.csv"
+  log_filename: "run.log"
+
+
+# -------------------------------------------------
+# LLM WEB ASSISTANCE (free sources: DuckDuckGo + Wikipedia)
+# -------------------------------------------------
+llm_web_assistance:
+  enable: false
+  model: "llama3.1"
+  ollama_url: "http://host.docker.internal:11434/api/generate"
+  max_segments: 20
+  max_search_queries: 5
+  timeout_seconds: 60
+
+
+# -------------------------------------------------
+# SUGGESTIONS (catalog matching + Ollama analysis)
+# -------------------------------------------------
+suggestions:
+  model: "llama3.1"
+  ollama_url: "http://host.docker.internal:11434/api/generate"
+  analysis_timeout_seconds: 60
+  top_n: 25
+  min_competitor_sim: 0.10
+  min_cybba_sim: 0.10
+
+
+# -------------------------------------------------
+# DEBUG
+# -------------------------------------------------
+debug:
+  log_l1_sources: true

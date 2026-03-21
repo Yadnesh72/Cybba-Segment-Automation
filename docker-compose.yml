@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/config/credentials.env
+    environment:
+      LOG_LEVEL: "INFO"
+    # Override CMD to add --reload for dev hot-reloading
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      # Persist large data files
+      - ./Data:/app/Data
+      # ✅ FIXED: DB now persists correctly at /app/data/runs.db
+      - ./backend/data:/app/data
+      # ✅ FIXED: source code mounted at /app/src so changes hot-reload
+      - ./backend/src:/app/src
+      # ✅ Mount api.py and config for hot-reload
+      - ./backend/api.py:/app/api.py
+      - ./backend/config:/app/config
+      # ✅ Mount models
+      - ./backend/models:/app/models
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: "http://127.0.0.1:8000"
+    depends_on:
+      - backend
+    volumes:
+      # ✅ Mount source files so Vite HMR picks up changes instantly
+      - ./frontend/src:/app/src
+      - ./frontend/components:/app/components
+      - ./frontend/styles.css:/app/styles.css

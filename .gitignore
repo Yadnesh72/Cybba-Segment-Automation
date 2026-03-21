@@ -1,0 +1,51 @@
+# ── Credentials & Secrets ──────────────────────────────────────────────────────
+backend/config/credentials.env
+.env
+
+# ── Large Data Files ───────────────────────────────────────────────────────────
+Data/Input/Raw_segments/
+Data/Output/
+*.csv
+*.csv.gz
+*.gz
+*.npy
+
+# ── Trained ML Models ──────────────────────────────────────────────────────────
+backend/models/
+backend/Data/Models/
+*.joblib
+*.pkl
+*.h5
+
+# ── Database ───────────────────────────────────────────────────────────────────
+*.db
+
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# ── Node / Frontend ────────────────────────────────────────────────────────────
+frontend/node_modules/
+
+# ── Backup / Scratch Files ─────────────────────────────────────────────────────
+*_backup*
+*_beforedocker
+*feb26
+*march26
+*jan26
+*dec25
+tests/
+
+# ── Claude Code Internal ───────────────────────────────────────────────────────
+.claude/
+
+# ── OS ─────────────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
