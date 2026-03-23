@@ -5,6 +5,7 @@
 This repository contains the **Cybba Segment Automation Platform** — a full-stack web application that automatically discovers new audience segment opportunities by analyzing the data marketplace, then generates segment names, taxonomy, descriptions, and pricing ready for submission.
 
 Certain large files (trained models, raw input CSVs, output data) are **not included in this repo** due to GitHub file size limits. They are stored separately and must be placed manually before running the project.
+Link: https://cybba.sharepoint.com/:f:/s/SegmentExpansionAutomation/IgAzq8SOLfy3QYtdVAXYGbv8AfdEDEIlaUEXEp-ougONYlI?e=XVrqck
 
 ---
 
