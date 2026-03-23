@@ -6,6 +6,8 @@ This repository contains the **Cybba Segment Automation Platform** — a full-st
 
 Certain large files (trained models, raw input CSVs, output data) are **not included in this repo** due to GitHub file size limits. They are stored separately and must be placed manually before running the project.
 
+> 📁 **SharePoint:** [cybba_segment_automation](https://cybbadigital.sharepoint.com/sites/DataProducts/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FDataProducts%2FShared%20Documents%2Fcybba%5Fsegment%5Fautomation&viewid=5b5b9867%2D68dd%2D4e1f%2D8da4%2D8d2ba3c4e261)
+
 ---
 
 ## Prerequisites
